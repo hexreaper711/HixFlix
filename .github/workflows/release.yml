@@ -1,0 +1,62 @@
+# Every push to main builds HixFlix and releases it as the next version: VERSION.txt holds the
+# major.minor (1.0), each release adds one to the last tag's patch (v1.0.0, v1.0.1, ...). Changing
+# VERSION.txt to 1.1 starts again at v1.1.0. The version is stamped in the app (Settings > About,
+# param.json's contentVersion) and the zip (HixFlix-v1.0.1.zip).
+#
+# Built on the owner's Mac (a self-hosted runner labelled hixflix): the only machine with the PS5
+# toolchain (ps5-plume-triangle, in the repository variable PLUME_DIR, with its Docker volumes) and
+# VLC's built libraries. The runner's builds use their own Docker volumes (hixflix-ci-*), not the
+# ones of the owner's own checkout.
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# one release at a time, in push order (none is skipped: each push gets its version)
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and release
+    runs-on: [self-hosted, hixflix]
+    timeout-minutes: 600
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Next version
+        id: version
+        run: |
+          git fetch --tags --force
+          base=$(tr -d '[:space:]' < VERSION.txt)
+          last=$(git tag --list "v$base.*" | sed "s/^v$base\.//" | grep -E '^[0-9]+$' | sort -n | tail -1)
+          next=$base.$(( ${last:--1} + 1 ))
+          echo "version=$next" >> "$GITHUB_OUTPUT"
+          echo "Releasing v$next"
+
+      - name: Build
+        env:
+          PLUME_DIR: ${{ vars.PLUME_DIR }}
+          HIXFLIX_WORK_VOLUME: hixflix-ci-work
+          HIXFLIX_PLUME_BUILD_VOLUME: hixflix-ci-plume-build
+          HIXFLIX_TMDB_KEY: ${{ secrets.HIXFLIX_TMDB_KEY }}
+        run: ./build.sh --version "${{ steps.version.outputs.version }}"
+
+      - name: Tag and release with the zip
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: v${{ steps.version.outputs.version }}
+        run: |
+          cat > notes.md <<EOF
+          Install: unzip, copy the \`PPSA71420\` folder to \`/data/homebrew/\` on the PS5 (it replaces
+          the app and keeps your library and keys), then start HixFlix. See the README.
+          EOF
+          gh release create "$VERSION" "dist/HixFlix-$VERSION.zip" \
+            --target "$GITHUB_SHA" --title "HixFlix $VERSION" --notes-file notes.md --generate-notes

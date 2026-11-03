@@ -1,0 +1,25 @@
+# HixFlix: a title's page, its dialogs, and Quit
+300 press down
+400 shot shots/21-row-focus.png
+420 press cross
+560 shot shots/22-detail.png
+580 press down
+600 press down
+700 shot shots/23-episodes.png
+720 press up
+740 press up
+760 press right
+780 press cross
+880 shot shots/24-mylist.png
+900 press circle
+920 press right
+940 press cross
+1040 shot shots/25-more.png
+1060 press circle
+1080 press circle
+1120 press options
+1170 press up
+1190 press cross
+1280 shot shots/26-quit.png
+1300 press up
+1320 press cross

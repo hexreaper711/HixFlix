@@ -1,0 +1,4 @@
+# HixFlix's first page on an empty install
+250 shot shots/31-onboard.png
+270 type 0123abcd
+340 shot shots/32-onboard-typed.png

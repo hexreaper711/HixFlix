@@ -1,0 +1,34 @@
+# HixFlix screenshot tour (host build): VLCPS5_SCRIPT=host/demo/tour.txt
+# home with the billboard (images load in the background: wait)
+400 shot shots/01-home.png
+420 press down
+520 shot shots/02-row.png
+540 press down
+640 shot shots/03-row2.png
+660 press cross
+800 shot shots/04-detail.png
+820 press down
+840 press down
+940 shot shots/05-episodes.png
+960 press circle
+1000 press r1
+1150 shot shots/06-tv-tab.png
+1170 press options
+1260 shot shots/07-settings.png
+1280 press down
+1290 press down
+1300 press down
+1310 press cross
+1400 shot shots/08-manage.png
+1420 press cross
+1500 shot shots/09-group.png
+1520 press cross
+1700 shot shots/10-match.png
+1720 press circle
+1740 press circle
+1760 press circle
+1780 press circle
+1800 press r3
+1840 type break
+1900 shot shots/11-search.png
+1920 quit

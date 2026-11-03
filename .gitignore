@@ -1,0 +1,8 @@
+.DS_Store
+dist/
+builds/
+*.tmp
+host/demo/shots/
+# your own keys for the PS5 (never committed)
+hixflix-keys.txt
+hixflix-db.json
