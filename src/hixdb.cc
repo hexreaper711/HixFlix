@@ -18,7 +18,12 @@
 namespace {
 
 std::recursive_mutex mtx;
-std::mutex write_mtx; /* one write at a time, in order */
+std::mutex write_mtx; /* one write at a time */
+/* Snapshots are numbered as they're taken (under mtx); a write thread that
+ * gets the file after a newer snapshot was written skips its older one, or
+ * a save made a moment before quitting could be overwritten by the one before. */
+uint64_t snapshots_taken;   /* under mtx */
+uint64_t snapshot_written;  /* under write_mtx */
 Db data;
 int generation = 1;
 bool dirty;
@@ -226,9 +231,11 @@ std::string serialize(const Db &d)
     return o.s;
 }
 
-void write_file(std::string text)
+void write_file(std::string text, uint64_t snapshot)
 {
     std::lock_guard<std::mutex> g(write_mtx);
+    if (snapshot <= snapshot_written)
+        return; /* a newer one is on disk already */
     std::string path = db_path(), tmp = path + ".tmp";
     FILE *f = fopen(tmp.c_str(), "wb");
     if (!f) {
@@ -237,8 +244,8 @@ void write_file(std::string text)
     }
     bool ok = fwrite(text.data(), 1, text.size(), f) == text.size();
     ok = fclose(f) == 0 && ok;
-    if (ok)
-        rename(tmp.c_str(), path.c_str());
+    if (ok && rename(tmp.c_str(), path.c_str()) == 0)
+        snapshot_written = snapshot;
     else
         fprintf(stderr, "db: writing %s failed\n", tmp.c_str());
 }
@@ -409,27 +416,31 @@ int db_generation()
 void db_update()
 {
     std::string text;
+    uint64_t snapshot;
     {
         std::lock_guard<std::recursive_mutex> g(mtx);
         if (!dirty || plat_time() - dirty_since < 1.0)
             return;
         dirty = false;
         text = serialize(data);
+        snapshot = ++snapshots_taken;
     }
-    std::thread(write_file, std::move(text)).detach();
+    std::thread(write_file, std::move(text), snapshot).detach();
 }
 
 void db_flush()
 {
     std::string text;
+    uint64_t snapshot;
     {
         std::lock_guard<std::recursive_mutex> g(mtx);
         if (!dirty)
             return;
         dirty = false;
         text = serialize(data);
+        snapshot = ++snapshots_taken;
     }
-    write_file(std::move(text));
+    write_file(std::move(text), snapshot);
 }
 
 int db_new_id()
