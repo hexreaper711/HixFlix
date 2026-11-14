@@ -101,6 +101,7 @@ std::vector<TmdbResult> search_results;
 struct LinkRef {
     int id;
     int season, episode;
+    int absolute = -1;  /* numbered through the show: that number (fetch_tv set the season) */
 };
 
 /* What a TV match needs from TMDB: the show, and the seasons its files are in. */
@@ -109,11 +110,35 @@ struct TvInfo {
     std::map<int, Json> seasons;
 };
 
-bool fetch_tv(const std::string &key, int64_t tmdb_id, const std::vector<LinkRef> &links, TvInfo *info,
+bool fetch_tv(const std::string &key, int64_t tmdb_id, std::vector<LinkRef> &links, TvInfo *info,
               std::string *error)
 {
     if (!tmdb_details(key, true, tmdb_id, &info->details, error))
         return false;
+    /* Episodes numbered through the show, without a season (Naruto Shippuden
+     * 143): onto TMDB's seasons by their episode counts (specials, season 0,
+     * not counted). One past the last season's stays without an episode. */
+    std::vector<std::pair<int, int>> counts; /* (season, episodes) */
+    for (const Json &s : info->details["seasons"].items) {
+        int n = (int)s["season_number"].number(-1), c = (int)s["episode_count"].number();
+        if (n >= 1 && c > 0)
+            counts.push_back({ n, c });
+    }
+    std::sort(counts.begin(), counts.end());
+    for (LinkRef &l : links) {
+        if (l.season >= 0 || l.episode <= 0)
+            continue;
+        int e = l.episode;
+        for (const auto &c : counts) {
+            if (e <= c.second) {
+                l.absolute = l.episode;
+                l.season = c.first;
+                l.episode = e;
+                break;
+            }
+            e -= c.second;
+        }
+    }
     std::set<int> needed;
     for (const LinkRef &l : links)
         if (l.season >= 0)
@@ -199,8 +224,13 @@ int apply_tv(const TvInfo &info, const std::vector<LinkRef> &links)
         int season_id = season->id;
         std::set<int> needed;
         for (const LinkRef &l : links)
-            if (l.season == n && l.episode >= 0)
+            if (l.season == n && l.episode >= 0) {
                 needed.insert(l.episode);
+                /* some shows number on through their seasons on TMDB too
+                 * (Naruto Shippuden's season 2 is 33-53): either number */
+                if (l.absolute >= 0)
+                    needed.insert(l.absolute);
+            }
         for (const Json &e : sd->second["episodes"].items) {
             int en = (int)e["episode_number"].number(-1);
             if (!needed.count(en))
@@ -229,9 +259,13 @@ int apply_tv(const TvInfo &info, const std::vector<LinkRef> &links)
             continue;
         int episode_id = 0;
         if (ref.season >= 0 && ref.episode >= 0)
-            if (DbSeason *s = db_season(media_id, ref.season))
-                if (DbEpisode *e = db_episode(s->id, ref.episode))
+            if (DbSeason *s = db_season(media_id, ref.season)) {
+                DbEpisode *e = db_episode(s->id, ref.episode);
+                if (!e && ref.absolute >= 0)
+                    e = db_episode(s->id, ref.absolute);
+                if (e)
                     episode_id = e->id;
+            }
         l->matched = true;
         l->media_id = media_id;
         l->episode_id = episode_id;
@@ -257,10 +291,11 @@ bool match_tmdb(const std::string &key, bool tv, int64_t tmdb_id, const std::vec
 {
     if (tv) {
         TvInfo info;
-        if (!fetch_tv(key, tmdb_id, links, &info, error))
+        std::vector<LinkRef> mapped = links; /* (numbered-through episodes get their seasons) */
+        if (!fetch_tv(key, tmdb_id, mapped, &info, error))
             return false;
         auto g = db_lock();
-        apply_tv(info, links);
+        apply_tv(info, mapped);
         *title = info.details["name"].text();
     } else {
         Json d;
@@ -377,6 +412,15 @@ void scan_run()
                     l.unlocked_url.clear();
                     l.unlocked_at = 0;
                 }
+                /* not matched yet: its name read again, so a better parser
+                 * (episode numbers without a season) groups it this time */
+                if (!l.matched) {
+                    ParsedName p = parse_filename(l.filename);
+                    l.parsed_show = p.show;
+                    l.parsed_season = p.season;
+                    l.parsed_episode = p.episode;
+                    l.quality = p.quality;
+                }
                 continue;
             }
             known[f.filename] = db().links.size();
@@ -431,7 +475,7 @@ void scan_run()
             if (gr.search.empty())
                 gr.search = normalize_for_search(l.parsed_show);
             gr.links.push_back({ l.id, l.parsed_season, l.parsed_episode });
-            gr.tv = gr.tv || l.parsed_season >= 0;
+            gr.tv = gr.tv || l.parsed_season >= 0 || l.parsed_episode >= 0;
             gr.newest = std::max(gr.newest, l.id);
         }
     }
@@ -473,8 +517,8 @@ std::vector<const DbLink *> title_links(int media_id)
             e = ep->number;
             if (const DbSeason *se = db_season_by_id(ep->season_id))
                 s = se->number;
-        } else if (l->parsed_season >= 0) {
-            s = l->parsed_season;
+        } else if (l->parsed_episode >= 0) {
+            s = std::max(0, l->parsed_season);
             e = l->parsed_episode;
         }
         return std::make_tuple(s, e, l->filename);
@@ -511,8 +555,12 @@ int digits(const std::string &s, size_t *i, int min, int max)
     return n >= min ? v : -1;
 }
 
-/* The release-name patterns HIX's parser.ts matches, leftmost first:
+/* The release-name patterns, leftmost first. HIX's parser.ts had 0-3:
  * 0 [sep]S01E05, 1 [sep]S01x05, 2 [sep]1x05, 3 Season 1 Episode 5.
+ * Tried after them, for names with an episode number but no season (anime,
+ * numbered through the show; *season stays -1):
+ * 4 [sep]Episode 05, [sep]Ep05, [sep]Ep.05
+ * 5 "Show - 05", "[Group] Show - 143 [1080p]" (2 or 3 digits: not a year)
  * The match's start, or npos. */
 size_t find_episode(const std::string &name, int kind, int *season, int *episode)
 {
@@ -535,6 +583,33 @@ size_t find_episode(const std::string &name, int kind, int *season, int *episode
                 continue;
             i++;
             e = digits(low, &i, kind == 2 ? 2 : 1, 3);
+        } else if (kind == 4) {
+            if (!separator(low[i]))
+                continue;
+            i++;
+            if (low.compare(i, 7, "episode") == 0)
+                i += 7;
+            else if (low.compare(i, 2, "ep") == 0)
+                i += 2;
+            else
+                continue;
+            while (i < low.size() && separator(low[i]))
+                i++;
+            e = digits(low, &i, 1, 4);
+            /* "Ep 05", "Episode 05v2"; not "Ep 720p" or "Episodes" */
+            if (e < 0 || (i < low.size() && isalpha((unsigned char)low[i]) && low[i] != 'v'))
+                continue;
+        } else if (kind == 5) {
+            if (low.compare(i, 3, " - ") != 0)
+                continue;
+            i += 3;
+            e = digits(low, &i, 2, 3);
+            if (e < 0)
+                continue;
+            if (i + 1 < low.size() && low[i] == 'v' && isdigit((unsigned char)low[i + 1]))
+                i += 2; /* a fixed release: "05v2" */
+            if (i < low.size() && low[i] != ' ' && low[i] != '[' && low[i] != '(' && low[i] != '.')
+                continue;
         } else {
             if (low.compare(i, 6, "season") != 0)
                 continue;
@@ -551,7 +626,7 @@ size_t find_episode(const std::string &name, int kind, int *season, int *episode
                 i++;
             e = digits(low, &i, 1, 3);
         }
-        if (s >= 0 && e >= 0) {
+        if (e >= 0 && (s >= 0 || kind >= 4)) {
             *season = s;
             *episode = e;
             return at;
@@ -593,9 +668,20 @@ ParsedName parse_filename(const std::string &filename)
     }
     for (char &c : p.quality)
         c = (char)toupper((unsigned char)c);
-    for (int kind = 0; kind < 4; kind++) {
+    for (int kind = 0; kind < 6; kind++) {
         int s, e;
         size_t start = find_episode(name, kind, &s, &e);
+        if (kind == 4) {
+            /* the two seasonless styles: whichever comes first in the name
+             * ("Naruto Shippuden - 290 - Power Episode 1" is episode 290) */
+            int s5, e5;
+            size_t start5 = find_episode(name, 5, &s5, &e5);
+            if (start5 < start) {
+                start = start5;
+                s = s5;
+                e = e5;
+            }
+        }
         if (start == std::string::npos)
             continue;
         p.show = clean(name.substr(0, start));

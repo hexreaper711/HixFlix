@@ -1912,7 +1912,7 @@ void hx_build_groups()
                 gr.matched++;
             if (l.hidden)
                 gr.hidden++;
-            if (l.parsed_season >= 0)
+            if (l.parsed_season >= 0 || l.parsed_episode >= 0)
                 gr.tv = true;
             if (l.matched)
                 if (DbMedia *md = db_media(l.media_id)) {
@@ -2056,7 +2056,7 @@ std::vector<HxFile> hx_group_files(int *media_id, bool *tv)
             f.title = m->title;
             *media_id = m->id;
         }
-        if (l.parsed_season >= 0)
+        if (l.parsed_season >= 0 || l.parsed_episode >= 0)
             *tv = true;
         out.push_back(f);
     }
