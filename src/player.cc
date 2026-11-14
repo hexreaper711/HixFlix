@@ -2294,9 +2294,13 @@ bool player_open_media(libvlc_media_t *m, const std::string &path, int64_t start
         /* Live TV over the network: 2 s of buffer, not VLC's 1. Channels
          * whose segments come in late made VLC grow its buffer as it played
          * ("PCR is called too late"), and the picture stuttered each time
-         * (a BBC channel, 2026-10-13). Shares and files keep VLC's own. */
-        if (url_scheme_is(path, "http") || url_scheme_is(path, "https") || url_scheme_is(path, "udp") ||
-            url_scheme_is(path, "rtp"))
+         * (a BBC channel, 2026-10-13). Shares and files keep VLC's own.
+         * A caller's own value stays (HixFlix's films ask for more). */
+        bool own_caching = std::any_of(source_options.begin(), source_options.end(), [](const std::string &o) {
+            return o.compare(0, 17, ":network-caching=") == 0;
+        });
+        if (!own_caching && (url_scheme_is(path, "http") || url_scheme_is(path, "https") || url_scheme_is(path, "udp") ||
+                             url_scheme_is(path, "rtp")))
             libvlc_media_add_option(m, ":network-caching=2000");
     } else if (!local.empty()) {
         /* 1 s between decoding and showing, not VLC's 0.3 s for files: the
