@@ -20,7 +20,11 @@
 /* ---- look ------------------------------------------------------------------ */
 
 #define HX_KEY_FILE "hixflix-keys.txt"
-#define HX_STREAM_CACHING ":network-caching=10000"
+/* How a film streams (hx_pending_tick): 10 s buffered before it plays (after
+ * a seek or a stall too), and VLC's prefetch downloading ahead into 512 MB of
+ * memory on a thread of its own, also while paused (patches/0024): about a
+ * minute of a 4K remux, several of a 1080p file. */
+#define HX_STREAM_OPTIONS { ":network-caching=10000", ":stream-filter=prefetch", ":prefetch-buffer-size=524288" }
 
 const ImU32 NF_BG = IM_COL32(20, 20, 20, 255);
 const ImU32 NF_RED = IM_COL32(229, 9, 20, 255);
@@ -574,10 +578,10 @@ void hx_pending_tick()
     }
     bool retried = hx_pending_fresh;
     hx_now = { true, link, unlock_was_cached(), retried };
-    /* 10 s of the film buffered ahead, not the 2 s VLC-PS5 gives a link (tuned
-     * for live TV): a big file (4K remux, 40-80 Mbit/s) over Wi-Fi stalled at
-     * every short dip in speed. A start takes a few seconds more. */
-    start_stream(unlock_url(), { HX_STREAM_CACHING }, false, link_title(link), nullptr, hx_pending_from);
+    /* not the 2 s VLC-PS5 gives a link (tuned for live TV), and no download
+     * ahead: a big file (4K remux, 40-80 Mbit/s) over Wi-Fi stalled at every
+     * short dip in speed (HX_STREAM_OPTIONS) */
+    start_stream(unlock_url(), HX_STREAM_OPTIONS, false, link_title(link), nullptr, hx_pending_from);
     if (screen != PLAYER)
         hx_now.on = false; /* it didn't open */
 }

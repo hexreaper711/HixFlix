@@ -46,16 +46,44 @@ ps5)
     ;;
 esac
 
-# VLC-PS5's own changes to VLC (patches/), applied once: a stamp says they are (a second
-# configure, for the other target, found some patches applying again at another place).
-if [[ ! -f $vlc/.vlcps5-patched ]]; then
+# VLC-PS5's own changes to VLC (patches/), each applied once: a stamp per patch says it is (a
+# second configure, for the other target, found some patches applying again at another place).
+# One without a stamp that reverses cleanly is in already. A tree the old all-at-once step
+# patched (.vlcps5-patched) has 0001-0023 in: stamped as they are, never tried again (0014
+# can't be reversed past 0018 and would apply a second time).
+stamps=$vlc/.vlcps5-patches
+if [[ -f $vlc/.vlcps5-patched && ! -d $stamps ]]; then
+    mkdir -p "$stamps"
     for p in "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"/patches/*.patch; do
-        if patch -d "$vlc" -p1 -s -N --dry-run < "$p" >/dev/null 2>&1; then
-            patch -d "$vlc" -p1 -s -N < "$p"
-            echo "applied $(basename "$p")"
-        fi
+        name=$(basename "$p")
+        [[ $name < 0024 ]] && touch "$stamps/$name"
     done
-    touch "$vlc/.vlcps5-patched"
+fi
+mkdir -p "$stamps"
+for p in "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"/patches/*.patch; do
+    name=$(basename "$p")
+    [[ -f $stamps/$name ]] && continue
+    if patch -d "$vlc" -p1 -s -R --dry-run < "$p" >/dev/null 2>&1; then
+        :
+    elif patch -d "$vlc" -p1 -s -N --dry-run < "$p" >/dev/null 2>&1; then
+        patch -d "$vlc" -p1 -s -N < "$p"
+        echo "applied $name"
+    else
+        echo "patch $name doesn't apply to $vlc" >&2
+        exit 1
+    fi
+    touch "$stamps/$name"
+done
+
+# Configured before: built again (only what changed) when a patch went in after this target's
+# last build (the PS5 and Linux builds share the source tree), else nothing to do.
+built=$build/.vlcps5-built
+if [[ -f $build/config.status ]]; then
+    if [[ ! -f $built || ! -f $build/src/.libs/libvlccore.a || -n $(find "$stamps" -type f -newer "$built") ]]; then
+        make -C "$build" -j"$(nproc)"
+        touch "$built"
+    fi
+    exit 0
 fi
 
 off=(
@@ -89,3 +117,4 @@ cd "$build"
     LDFLAGS="-L$prefix/lib" \
     "${args[@]}"
 make -j"$(nproc)"
+touch "$built"

@@ -1,0 +1,20 @@
+--- a/modules/stream_filter/prefetch.c
++++ b/modules/stream_filter/prefetch.c
+@@ -126,12 +126,14 @@
+         {   /* Update pause state */
+             msg_Dbg(stream, paused ? "resuming" : "pausing");
+             paused = sys->paused;
+-            ThreadControl(stream, STREAM_SET_PAUSE_STATE, paused);
++            /* VLC-PS5: the source isn't paused, and the buffer goes on
++             * filling while the video is: a pause builds a reserve for a
++             * slow line (HixFlix's films over Wi-Fi, 2026-11-15) */
+             continue;
+         }
+ 
+-        if (paused || sys->error)
+-        {   /* Wait for not paused and not failed */
++        if (sys->error)
++        {   /* Wait for not failed */
+             vlc_cond_wait(&sys->wait_space, &sys->lock);
+             continue;
+         }

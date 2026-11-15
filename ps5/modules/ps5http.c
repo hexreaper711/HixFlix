@@ -181,6 +181,7 @@ typedef struct ps5http_sys {
     uint64_t read_bytes;
     mtime_t read_wait;    /* time spent inside the console's read */
     bool cancel_logged;
+    int reconnects;       /* in a row, since the last read that brought bytes */
     struct parallel *par; /* a segment fetched over several connections, or NULL */
 } ps5http_sys;
 
@@ -682,21 +683,43 @@ static ssize_t Read(stream_t *access, void *buf, size_t len)
     size_t most = sys->size && sys->can_seek ? ((size_t)1 << 20) : ((size_t)64 << 10);
     if (len > most)
         len = most;
-    vlc_interrupt_register(abort_on_interrupt, &sys->req);
-    mtime_t t0 = mdate();
-    int n = sceHttpReadData(sys->req, buf, len);
-    sys->read_wait += mdate() - t0;
-    vlc_interrupt_unregister();
-    if (n > 0)
-        sys->read_bytes += (uint64_t)n;
-    if (n <= 0) {
+    for (;;) {
+        vlc_interrupt_register(abort_on_interrupt, &sys->req);
+        mtime_t t0 = mdate();
+        int n = sceHttpReadData(sys->req, buf, len);
+        sys->read_wait += mdate() - t0;
+        vlc_interrupt_unregister();
+        if (n > 0) {
+            sys->read_bytes += (uint64_t)n;
+            sys->reconnects = 0;
+            sys->pos += (uint64_t)n;
+            return n;
+        }
         if (n < 0)
             PLOG("read failed (%#x)", (unsigned)n);
+        /* A file of known size that stops short: the connection broke (a
+         * Wi-Fi drop, a server closing it while the prefetch buffer was full
+         * during a long pause), not the end. Asked again from here, a few
+         * times, before it's the end (it was always the end before, and a
+         * film just stopped). */
+        if (sys->size && sys->can_seek && sys->pos < sys->size && !cancelled(sys) && !vlc_killed() &&
+            sys->reconnects < 5) {
+            sys->reconnects++;
+            PLOG("connection lost at %" PRIu64 " of %" PRIu64 ": asking again (%d)", sys->pos, sys->size,
+                 sys->reconnects);
+            if (sys->reconnects > 1)
+                vlc_msleep_i11e(CLOCK_FREQ / 2 * (sys->reconnects - 1));
+            /* only the rest of the file will do: a whole file again (200)
+             * would play the start in the middle */
+            if (send_request(access, sys->pos) != VLC_SUCCESS || sys->status != 206) {
+                PLOG("asking again failed (status %d)", sys->status);
+                drop_request(sys);
+            }
+            continue; /* (a dropped request fails the next read: another try) */
+        }
         sys->eof = true;
         return 0;
     }
-    sys->pos += (uint64_t)n;
-    return n;
 }
 
 static int Seek(stream_t *access, uint64_t offset)

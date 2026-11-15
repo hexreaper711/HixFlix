@@ -52,10 +52,10 @@ if (( deps )); then
                 -o "$work/dl/vlc-$vlc_version.tar.xz"
         tar xf "$work/dl/vlc-$vlc_version.tar.xz" -C "$work/src"
     fi
-    if [[ ! -f $work/build-vlc-ps5/src/.libs/libvlccore.a ]]; then
-        step "libvlc $vlc_version with every plugin linked in (once)"
-        TARGET=ps5 bash "$here/ps5/configure-vlc.sh"
-    fi
+    # (every run: a patch added to patches/ is applied and its part of libvlc built again)
+    step "libvlc $vlc_version with every plugin linked in"
+    TARGET=ps5 bash "$here/ps5/configure-vlc.sh"
+
 fi
 
 if (( title )); then
@@ -81,10 +81,9 @@ if (( host )); then
         done
         touch "$work/prefix-host/.hixflix-deps-done"
     fi
-    if [[ ! -f $work/build-vlc-host/src/.libs/libvlccore.a ]]; then
-        step "libvlc for Linux (once)"
-        TARGET=host bash "$here/ps5/configure-vlc.sh"
-    fi
+    step "libvlc for Linux"
+    TARGET=host bash "$here/ps5/configure-vlc.sh"
+
     step "The Linux test build"
     bash "$here/host/build-app.sh"
 fi
